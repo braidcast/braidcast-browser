@@ -27,6 +27,7 @@
 #include <sstream>
 #include <thread>
 #include <mutex>
+#include <cstdlib>
 #include <nlohmann/json.hpp>
 #include <obs-websocket-api.h>
 
@@ -78,6 +79,16 @@ static int adapterCount = 0;
 static std::wstring deviceId;
 
 bool hwaccel = false;
+
+/* When the host frontend owns the single CEF context (sets OBS_FRONTEND_OWNS_CEF
+ * before loading this module), obs-browser must NOT init/run/shutdown CEF
+ * itself; it only registers its scheme handler and signals cef_started_event.
+ * Absent the flag every path below is byte-identical to upstream. */
+static bool FrontendOwnsCef()
+{
+	const char *v = getenv("OBS_FRONTEND_OWNS_CEF");
+	return v && *v && v[0] != '0';
+}
 
 /* ========================================================================= */
 
@@ -270,6 +281,15 @@ static CefRefPtr<BrowserApp> app;
 
 static void BrowserInit(void)
 {
+	if (FrontendOwnsCef()) {
+		/* The frontend already called CefInitialize for the one shared CEF
+		 * context; just register our scheme handler and signal readiness. */
+		blog(LOG_INFO, "[obs-browser]: frontend owns CEF; skipping CefInitialize");
+		CefRegisterSchemeHandlerFactory("http", "absolute", new BrowserSchemeHandlerFactory());
+		os_event_signal(cef_started_event);
+		return;
+	}
+
 	string path = obs_get_module_binary_path(obs_current_module());
 	path = path.substr(0, path.find_last_of('/') + 1);
 	path += "//obs-browser-page";
@@ -419,6 +439,14 @@ static void BrowserManagerThread(void)
 extern "C" EXPORT void obs_browser_initialize(void)
 {
 	if (!os_atomic_set_bool(&manager_initialized, true)) {
+		if (FrontendOwnsCef()) {
+			/* No manager thread / message loop: the frontend drives the
+			 * loop. BrowserInit only registers the scheme + signals here,
+			 * which is safe to run inline on the calling (source-create)
+			 * thread. */
+			BrowserInit();
+			return;
+		}
 #ifdef ENABLE_BROWSER_QT_LOOP
 		BrowserInit();
 #else
@@ -779,6 +807,14 @@ void obs_module_post_load(void)
 
 void obs_module_unload(void)
 {
+	if (FrontendOwnsCef()) {
+		/* No manager thread to join and no CEF teardown to do: the frontend
+		 * owns CefShutdown (which also clears scheme factories), so a clear
+		 * here would race it. Just release our own event. */
+		os_event_destroy(cef_started_event);
+		return;
+	}
+
 #ifdef ENABLE_BROWSER_QT_LOOP
 	BrowserShutdown();
 #else
