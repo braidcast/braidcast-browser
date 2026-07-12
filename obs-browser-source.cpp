@@ -22,7 +22,9 @@
 #include "wide-string.hpp"
 #include <nlohmann/json.hpp>
 #include <util/threading.h>
+#ifdef BROWSER_USE_QT
 #include <QApplication>
+#endif
 #include <util/dstr.h>
 #include <functional>
 #include <thread>
@@ -220,7 +222,7 @@ bool BrowserSource::CreateBrowser()
 		struct obs_video_info ovi;
 		obs_get_video_info(&ovi);
 		canvas_fps = (double)ovi.fps_num / (double)ovi.fps_den;
-		cefBrowserSettings.windowless_frame_rate = (fps_custom) ? fps : canvas_fps;
+		cefBrowserSettings.windowless_frame_rate = (fps_custom) ? fps : (int)canvas_fps;
 #endif
 #else
 		cefBrowserSettings.windowless_frame_rate = fps;
@@ -562,7 +564,7 @@ void BrowserSource::Tick()
 
 	if (!fps_custom) {
 		if (!!cefBrowser && canvas_fps != video_fps) {
-			cefBrowser->GetHost()->SetWindowlessFrameRate(video_fps);
+			cefBrowser->GetHost()->SetWindowlessFrameRate((int)video_fps);
 			canvas_fps = video_fps;
 		}
 	}

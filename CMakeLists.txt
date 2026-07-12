@@ -57,4 +57,11 @@ if(ENABLE_BROWSER_PANELS)
   include(cmake/feature-panels.cmake)
 endif()
 
+# Browser source/client code touches Qt only for the panel UI and the macOS
+# (ENABLE_BROWSER_QT_LOOP) message pump. Gate every Qt include/use behind this
+# single macro so the plugin links Qt-free when neither is active.
+if(ENABLE_BROWSER_PANELS OR OS_MACOS)
+  target_compile_definitions(obs-browser PRIVATE BROWSER_USE_QT)
+endif()
+
 set_target_properties_obs(obs-browser PROPERTIES FOLDER plugins/obs-browser PREFIX "")

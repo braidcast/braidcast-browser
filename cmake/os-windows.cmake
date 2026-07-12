@@ -7,6 +7,10 @@ target_link_options(obs-browser PRIVATE /IGNORE:4099)
 add_executable(obs-browser-helper WIN32 EXCLUDE_FROM_ALL)
 add_executable(OBS::browser-helper ALIAS obs-browser-helper)
 
+# The CEF render subprocess (obs-browser-page.exe) is required for browser
+# sources to render; build and deploy it alongside obs-browser.dll.
+add_dependencies(obs-browser obs-browser-helper)
+
 target_sources(
   obs-browser-helper
   PRIVATE # cmake-format: sortable
