@@ -25,6 +25,7 @@
 #include <obs.hpp>
 #include <functional>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <mutex>
 #include <cstdlib>
@@ -131,11 +132,10 @@ margin: 0px auto; \
 overflow: hidden; \
 }";
 
-static void browser_source_get_defaults(obs_data_t *settings)
+/* Every default BrowserSource::Update reads other than the page identity and its
+ * size, so the overlay type below cannot drift from the browser source. */
+static void browser_source_shared_defaults(obs_data_t *settings)
 {
-	obs_data_set_default_string(settings, "url", "https://obsproject.com/browser-source");
-	obs_data_set_default_int(settings, "width", 800);
-	obs_data_set_default_int(settings, "height", 600);
 	obs_data_set_default_int(settings, "fps", 30);
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
 	obs_data_set_default_bool(settings, "fps_custom", false);
@@ -147,6 +147,14 @@ static void browser_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "webpage_control_level", (int)DEFAULT_CONTROL_LEVEL);
 	obs_data_set_default_string(settings, "css", default_css);
 	obs_data_set_default_bool(settings, "reroute_audio", false);
+}
+
+static void browser_source_get_defaults(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, "url", "https://obsproject.com/browser-source");
+	obs_data_set_default_int(settings, "width", 800);
+	obs_data_set_default_int(settings, "height", 600);
+	browser_source_shared_defaults(settings);
 }
 
 static bool is_local_file_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
@@ -169,29 +177,10 @@ static bool is_fps_custom(obs_properties_t *props, obs_property_t *, obs_data_t 
 	return true;
 }
 
-static obs_properties_t *browser_source_get_properties(void *data)
+/* Everything below the page identity: identical for both CEF source types, so each
+ * one only has to add its own way of naming a page. */
+static void browser_source_shared_properties(obs_properties_t *props, BrowserSource *bs)
 {
-	obs_properties_t *props = obs_properties_create();
-	BrowserSource *bs = static_cast<BrowserSource *>(data);
-	DStr path;
-
-	obs_properties_set_flags(props, OBS_PROPERTIES_DEFER_UPDATE);
-	obs_property_t *prop = obs_properties_add_bool(props, "is_local_file", obs_module_text("LocalFile"));
-
-	if (bs && !bs->url.empty()) {
-		const char *slash;
-
-		dstr_copy(path, bs->url.c_str());
-		dstr_replace(path, "\\", "/");
-		slash = strrchr(path->array, '/');
-		if (slash)
-			dstr_resize(path, slash - path->array + 1);
-	}
-
-	obs_property_set_modified_callback(prop, is_local_file_modified);
-	obs_properties_add_path(props, "local_file", obs_module_text("LocalFile"), OBS_PATH_FILE, "*.*", path->array);
-	obs_properties_add_text(props, "url", obs_module_text("URL"), OBS_TEXT_DEFAULT);
-
 	obs_properties_add_int(props, "width", obs_module_text("Width"), 1, 8192, 1);
 	obs_properties_add_int(props, "height", obs_module_text("Height"), 1, 8192, 1);
 
@@ -235,6 +224,32 @@ static obs_properties_t *browser_source_get_properties(void *data)
 			return false;
 		},
 		bs);
+}
+
+static obs_properties_t *browser_source_get_properties(void *data)
+{
+	obs_properties_t *props = obs_properties_create();
+	BrowserSource *bs = static_cast<BrowserSource *>(data);
+	DStr path;
+
+	obs_properties_set_flags(props, OBS_PROPERTIES_DEFER_UPDATE);
+	obs_property_t *prop = obs_properties_add_bool(props, "is_local_file", obs_module_text("LocalFile"));
+
+	if (bs && !bs->url.empty()) {
+		const char *slash;
+
+		dstr_copy(path, bs->url.c_str());
+		dstr_replace(path, "\\", "/");
+		slash = strrchr(path->array, '/');
+		if (slash)
+			dstr_resize(path, slash - path->array + 1);
+	}
+
+	obs_property_set_modified_callback(prop, is_local_file_modified);
+	obs_properties_add_path(props, "local_file", obs_module_text("LocalFile"), OBS_PATH_FILE, "*.*", path->array);
+	obs_properties_add_text(props, "url", obs_module_text("URL"), OBS_TEXT_DEFAULT);
+
+	browser_source_shared_properties(props, bs);
 	return props;
 }
 
@@ -455,20 +470,19 @@ extern "C" EXPORT void obs_browser_initialize(void)
 	}
 }
 
-void RegisterBrowserSource()
+/* Everything an obs_source_info needs that is not the type's identity (id/name), its
+ * settings surface (defaults/properties), or how it resolves a page to load. Both CEF
+ * source types are one BrowserSource behind these, so they share every one of them:
+ * nothing here branches on the type id, and the per-source refresh hotkey and
+ * javascript_event proc BrowserSource registers are keyed by the source, not the type.
+ * libobs memcpys the struct on registration, so one stack instance per caller is fine. */
+static void fill_shared_browser_source_info(struct obs_source_info &info)
 {
-	struct obs_source_info info = {};
-	info.id = "browser_source";
 	info.type = OBS_SOURCE_TYPE_INPUT;
 	info.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_AUDIO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_INTERACTION |
 			    OBS_SOURCE_DO_NOT_DUPLICATE | OBS_SOURCE_SRGB;
-	info.get_properties = browser_source_get_properties;
-	info.get_defaults = browser_source_get_defaults;
 	info.icon_type = OBS_ICON_TYPE_BROWSER;
 
-	info.get_name = [](void *) {
-		return obs_module_text("BrowserSource");
-	};
 	info.create = [](obs_data_t *settings, obs_source_t *source) -> void * {
 		obs_browser_initialize();
 		return new BrowserSource(settings, source);
@@ -477,9 +491,6 @@ void RegisterBrowserSource()
 		static_cast<BrowserSource *>(data)->Destroy();
 	};
 	info.missing_files = browser_source_missingfiles;
-	info.update = [](void *data, obs_data_t *settings) {
-		static_cast<BrowserSource *>(data)->Update(settings);
-	};
 	info.get_width = [](void *data) {
 		return (uint32_t)static_cast<BrowserSource *>(data)->width;
 	};
@@ -523,6 +534,207 @@ void RegisterBrowserSource()
 	info.deactivate = [](void *data) {
 		static_cast<BrowserSource *>(data)->SetActive(false);
 	};
+}
+
+void RegisterBrowserSource()
+{
+	struct obs_source_info info = {};
+	fill_shared_browser_source_info(info);
+
+	info.id = "browser_source";
+	info.get_name = [](void *) {
+		return obs_module_text("BrowserSource");
+	};
+	info.get_properties = browser_source_get_properties;
+	info.get_defaults = browser_source_get_defaults;
+	info.update = [](void *data, obs_data_t *settings) {
+		static_cast<BrowserSource *>(data)->Update(settings);
+	};
+
+	obs_register_source(&info);
+}
+
+/* ========================================================================= */
+
+/* The Braidcast overlay source: a browser source that stores WHICH overlay it shows
+ * instead of the URL showing it. The loopback overlay server picks its port at
+ * startup -- it prefers the one it last bound but scans several bands when that is
+ * taken -- so a URL baked into a scene collection is a URL that eventually stops
+ * resolving. Storing the overlay id moves resolution to every load instead of just the
+ * first one.
+ *
+ * The frontend publishes the resolution procs on the libobs GLOBAL proc handler
+ * (frontend/src/overlay/overlay_sources.cpp) before it loads this module. Reading
+ * overlays.json here instead would duplicate the frontend's portable-mode path
+ * resolution and race the overlay server persisting a newly bound port. */
+static const char *const OVERLAY_SOURCE_ID = "braidcast_overlay";
+static const char *const OVERLAY_ID_KEY = "overlay_id";
+static const char *const OVERLAY_LIST_PROC = "braidcast_overlay_list";
+static const char *const OVERLAY_URL_PROC = "braidcast_overlay_url";
+
+/* calldata_free on scope exit: the callers below build std::strings out of the
+ * out-parameters, which can throw. */
+struct ScopedCallData {
+	calldata_t cd;
+
+	ScopedCallData() { calldata_init(&cd); }
+	~ScopedCallData() { calldata_free(&cd); }
+	ScopedCallData(const ScopedCallData &) = delete;
+	ScopedCallData &operator=(const ScopedCallData &) = delete;
+};
+
+/* One overlay proc call. Returns whether the proc RAN -- false means the frontend
+ * never published it, which is a different thing from it running and having nothing
+ * to say (`out` empty: no overlays exist, the id is unknown, or the overlay server
+ * never bound a port). The picker distinguishes the two so a failed registration
+ * cannot read as "you have no overlays".
+ *
+ * `listening`, when non-null, receives the proc's `listening` out-parameter and is
+ * left UNTOUCHED when the proc declares no such parameter (calldata_get_bool does not
+ * write on a miss). Callers seed it true, so a frontend older than that parameter
+ * keeps reading as healthy rather than as down. */
+static bool call_overlay_proc(const char *proc, const char *out_param, const char *overlay_id, std::string &out,
+			      bool *listening = nullptr)
+{
+	out.clear();
+
+	proc_handler_t *ph = obs_get_proc_handler();
+	if (!ph)
+		return false;
+
+	ScopedCallData call;
+	if (overlay_id)
+		calldata_set_string(&call.cd, "id", overlay_id);
+
+	if (!proc_handler_call(ph, proc, &call.cd))
+		return false;
+
+	const char *value = calldata_string(&call.cd, out_param);
+	if (value)
+		out = value;
+	if (listening)
+		calldata_get_bool(&call.cd, "listening", listening);
+	return true;
+}
+
+static void braidcast_overlay_get_defaults(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, OVERLAY_ID_KEY, "");
+	/* An overlay that cannot be resolved -- none picked yet, or the user deleted the
+	 * one this source pointed at -- renders a blank page rather than the browser
+	 * source's promo URL, so a broken binding looks inert instead of wrong. */
+	obs_data_set_default_string(settings, "url", "about:blank");
+	obs_data_set_default_int(settings, "width", 1920);
+	obs_data_set_default_int(settings, "height", 1080);
+	browser_source_shared_defaults(settings);
+}
+
+/* The overlay this source is bound to right now, straight off its settings. */
+static std::string braidcast_overlay_stored_id(BrowserSource *bs)
+{
+	if (!bs || !bs->source)
+		return std::string();
+
+	OBSDataAutoRelease settings = obs_source_get_settings(bs->source);
+	return obs_data_get_string(settings, OVERLAY_ID_KEY);
+}
+
+static obs_properties_t *braidcast_overlay_get_properties(void *data)
+{
+	obs_properties_t *props = obs_properties_create();
+	BrowserSource *bs = static_cast<BrowserSource *>(data);
+
+	obs_properties_set_flags(props, OBS_PROPERTIES_DEFER_UPDATE);
+
+	obs_property_t *overlays = obs_properties_add_list(props, OVERLAY_ID_KEY,
+							   obs_module_text("BraidcastOverlay.Overlay"),
+							   OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+
+	/* Seeded true so a frontend predating the `listening` out-parameter -- which leaves
+	 * it untouched -- still reads as healthy. */
+	bool listening = true;
+	std::string listed;
+	if (!call_overlay_proc(OVERLAY_LIST_PROC, "overlays", nullptr, listed, &listening) || !listening) {
+		/* An unselectable marker covering both ways this picker would otherwise lie: a
+		 * frontend that never published the proc, and -- the reachable one -- an overlay
+		 * server that failed to bind, where every widget still enumerates but not one of
+		 * them can be served. Neither may read as "you have no overlays". */
+		const size_t idx =
+			obs_property_list_add_string(overlays, obs_module_text("BraidcastOverlay.Unavailable"), "");
+		obs_property_list_item_disable(overlays, idx, true);
+	} else {
+		const std::string storedId = braidcast_overlay_stored_id(bs);
+		bool storedIdListed = storedId.empty();
+
+		nlohmann::json parsed = nlohmann::json::parse(listed, nullptr, false);
+		if (parsed.is_array()) {
+			for (const auto &entry : parsed) {
+				if (!entry.is_object())
+					continue;
+
+				const std::string id = entry.value("id", std::string());
+				const std::string name = entry.value("name", std::string());
+				if (id.empty())
+					continue;
+
+				obs_property_list_add_string(overlays, name.empty() ? id.c_str() : name.c_str(),
+							     id.c_str());
+				if (id == storedId)
+					storedIdListed = true;
+			}
+		}
+
+		/* The bound overlay was deleted. Carry the id as its own entry so the combo
+		 * still shows what this source points at instead of rendering blank -- the
+		 * dialog passes an unmatched value through untouched, so this is legibility,
+		 * not a rebind. */
+		if (!storedIdListed) {
+			const std::string label = storedId + " " + obs_module_text("BraidcastOverlay.Missing");
+			obs_property_list_add_string(overlays, label.c_str(), storedId.c_str());
+		}
+	}
+
+	browser_source_shared_properties(props, bs);
+	return props;
+}
+
+/* Resolve the stored overlay id against the frontend, then run the shared update over
+ * a COPY of the settings carrying the result. The copy is what keeps the resolved URL
+ * -- and the widget token in it, which is what gates the loopback routes -- out of the
+ * saved scene collection, so what persists stays an id.
+ *
+ * obs_data_apply copies set VALUES only: libobs holds an item's default in a slot of
+ * its own and copy_item skips it (libobs/obs-data.c), so the copy has to have this
+ * type's defaults re-attached or the shared update would read width/height/fps as 0.
+ *
+ * An unresolvable id leaves url alone, which is both the deleted-overlay case (the
+ * default blank page) and what lets the gpu-diag kill switch's about:blank stick. */
+static void braidcast_overlay_update(void *data, obs_data_t *settings)
+{
+	OBSDataAutoRelease resolved = obs_data_create();
+	obs_data_apply(resolved, settings);
+	braidcast_overlay_get_defaults(resolved);
+
+	std::string url;
+	call_overlay_proc(OVERLAY_URL_PROC, "url", obs_data_get_string(settings, OVERLAY_ID_KEY), url);
+	if (!url.empty())
+		obs_data_set_string(resolved, "url", url.c_str());
+
+	static_cast<BrowserSource *>(data)->Update(resolved);
+}
+
+void RegisterBraidcastOverlaySource()
+{
+	struct obs_source_info info = {};
+	fill_shared_browser_source_info(info);
+
+	info.id = OVERLAY_SOURCE_ID;
+	info.get_name = [](void *) {
+		return obs_module_text("BraidcastOverlay");
+	};
+	info.get_properties = braidcast_overlay_get_properties;
+	info.get_defaults = braidcast_overlay_get_defaults;
+	info.update = braidcast_overlay_update;
 
 	obs_register_source(&info);
 }
@@ -770,6 +982,7 @@ bool obs_module_load(void)
 	     cef_version_info(5), cef_version_info(6), cef_version_info(7), CEF_VERSION);
 
 	RegisterBrowserSource();
+	RegisterBraidcastOverlaySource();
 	obs_frontend_add_event_callback(handle_obs_frontend_event, nullptr);
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE

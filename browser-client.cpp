@@ -633,6 +633,21 @@ void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, 
 	}
 }
 
+/* A console message carries the URL of the script that produced it, and a Braidcast
+ * overlay's URL carries the per-widget token that gates its loopback routes. Overlay
+ * JS is user-authored, so an uncaught exception in someone's own overlay would
+ * otherwise write that token into the OBS log. Drop the query string from loopback
+ * URLs; every other URL is logged unchanged. */
+static std::string SanitizedConsoleSource(const CefString &source)
+{
+	std::string url = source.ToString();
+	if (url.rfind("http://127.0.0.1:", 0) != 0 && url.rfind("http://localhost:", 0) != 0)
+		return url;
+
+	const size_t query = url.find('?');
+	return query == std::string::npos ? url : url.substr(0, query);
+}
+
 bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t level, const CefString &message,
 				     const CefString &source, int line)
 {
@@ -657,6 +672,6 @@ bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t l
 		sourceName = obs_source_get_name(bs->source);
 
 	blog(errorLevel, "[obs-browser: '%s'] %s: %s (%s:%d)", sourceName, code, message.ToString().c_str(),
-	     source.ToString().c_str(), line);
+	     SanitizedConsoleSource(source).c_str(), line);
 	return false;
 }
