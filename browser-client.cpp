@@ -638,10 +638,15 @@ void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, 
  * JS is user-authored, so an uncaught exception in someone's own overlay would
  * otherwise write that token into the OBS log. Drop the query string from loopback
  * URLs; every other URL is logged unchanged. */
+static bool IsLoopbackSource(const std::string &url)
+{
+	return url.rfind("http://127.0.0.1:", 0) == 0 || url.rfind("http://localhost:", 0) == 0;
+}
+
 static std::string SanitizedConsoleSource(const CefString &source)
 {
 	std::string url = source.ToString();
-	if (url.rfind("http://127.0.0.1:", 0) != 0 && url.rfind("http://localhost:", 0) != 0)
+	if (!IsLoopbackSource(url))
 		return url;
 
 	const size_t query = url.find('?');
@@ -651,6 +656,9 @@ static std::string SanitizedConsoleSource(const CefString &source)
 bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t level, const CefString &message,
 				     const CefString &source, int line)
 {
+	/* Returning false also has Chromium write the message to its own debug log with
+	 * the raw source URL, token included, so loopback overlays always claim it. */
+	const bool overlay = IsLoopbackSource(source.ToString());
 	int errorLevel = LOG_INFO;
 	const char *code = "Info";
 	switch (level) {
@@ -663,7 +671,7 @@ bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t l
 		code = "Fatal";
 		break;
 	default:
-		return false;
+		return overlay;
 	}
 
 	const char *sourceName = "<unknown>";
@@ -673,5 +681,5 @@ bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t l
 
 	blog(errorLevel, "[obs-browser: '%s'] %s: %s (%s:%d)", sourceName, code, message.ToString().c_str(),
 	     SanitizedConsoleSource(source).c_str(), line);
-	return false;
+	return overlay;
 }
