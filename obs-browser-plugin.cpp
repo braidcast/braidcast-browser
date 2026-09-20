@@ -146,7 +146,7 @@ static void browser_source_shared_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "restart_when_active", false);
 	obs_data_set_default_int(settings, "webpage_control_level", (int)DEFAULT_CONTROL_LEVEL);
 	obs_data_set_default_string(settings, "css", default_css);
-	obs_data_set_default_bool(settings, "reroute_audio", false);
+	obs_data_set_default_bool(settings, REROUTE_AUDIO_KEY, false);
 }
 
 static void browser_source_get_defaults(obs_data_t *settings)
@@ -184,7 +184,7 @@ static void browser_source_shared_properties(obs_properties_t *props, BrowserSou
 	obs_properties_add_int(props, "width", obs_module_text("Width"), 1, 8192, 1);
 	obs_properties_add_int(props, "height", obs_module_text("Height"), 1, 8192, 1);
 
-	obs_properties_add_bool(props, "reroute_audio", obs_module_text("RerouteAudio"));
+	obs_properties_add_bool(props, REROUTE_AUDIO_KEY, obs_module_text("RerouteAudio"));
 
 	obs_property_t *fps_set = obs_properties_add_bool(props, "fps_custom", obs_module_text("CustomFrameRate"));
 	obs_property_set_modified_callback(fps_set, is_fps_custom);
@@ -571,6 +571,7 @@ static const char *const OVERLAY_SOURCE_ID = "braidcast_overlay";
 static const char *const OVERLAY_ID_KEY = "overlay_id";
 static const char *const OVERLAY_LIST_PROC = "braidcast_overlay_list";
 static const char *const OVERLAY_URL_PROC = "braidcast_overlay_url";
+static const char *const OVERLAY_REROUTE_MIGRATED_KEY = "braidcast_reroute_migrated";
 
 /* calldata_free on scope exit: the callers below build std::strings out of the
  * out-parameters, which can throw. */
@@ -627,6 +628,31 @@ static void braidcast_overlay_get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "width", 1920);
 	obs_data_set_default_int(settings, "height", 1080);
 	browser_source_shared_defaults(settings);
+	/* After the shared defaults, which set this false for the plain browser source.
+	 * A widget's alert audio belongs on its own mixer channel -- with its own volume,
+	 * mute and monitoring -- rather than on the Windows render endpoint, where it only
+	 * reaches viewers by being re-captured through a Desktop Audio loopback. */
+	obs_data_set_default_bool(settings, REROUTE_AUDIO_KEY, true);
+}
+
+/* A source saved before the default above persisted an explicit false, which no change
+ * of default can reach. Flip it once and record that it was flipped, so a user who then
+ * turns rerouting back off is not overruled on the next load.
+ *
+ * Runs from update(), which is the only callback handed the source's own persisted
+ * settings -- create() never sees them (BrowserSource defers to obs_source_update) and
+ * this type declares no load(). */
+static void braidcast_overlay_migrate_reroute(obs_data_t *settings)
+{
+	if (obs_data_get_bool(settings, OVERLAY_REROUTE_MIGRATED_KEY)) {
+		return;
+	}
+
+	if (obs_data_has_user_value(settings, REROUTE_AUDIO_KEY) && !obs_data_get_bool(settings, REROUTE_AUDIO_KEY)) {
+		obs_data_set_bool(settings, REROUTE_AUDIO_KEY, true);
+	}
+
+	obs_data_set_bool(settings, OVERLAY_REROUTE_MIGRATED_KEY, true);
 }
 
 /* The overlay this source is bound to right now, straight off its settings. */
@@ -708,9 +734,16 @@ static obs_properties_t *braidcast_overlay_get_properties(void *data)
  * type's defaults re-attached or the shared update would read width/height/fps as 0.
  *
  * An unresolvable id leaves url alone, which is both the deleted-overlay case (the
- * default blank page) and what lets the gpu-diag kill switch's about:blank stick. */
+ * default blank page) and what lets the gpu-diag kill switch's about:blank stick.
+ *
+ * The migration runs against `settings` and BEFORE obs_data_apply, not grouped with the
+ * settings reads below it: obs_data_apply snapshots what it is given, so a migration
+ * after the copy would persist the flip but hand this update cycle the stale false, and
+ * the reroute would not take effect until something updated the source again. */
 static void braidcast_overlay_update(void *data, obs_data_t *settings)
 {
+	braidcast_overlay_migrate_reroute(settings);
+
 	OBSDataAutoRelease resolved = obs_data_create();
 	obs_data_apply(resolved, settings);
 	braidcast_overlay_get_defaults(resolved);

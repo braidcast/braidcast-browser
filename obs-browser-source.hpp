@@ -37,6 +37,11 @@ enum class ControlLevel : int {
 };
 inline constexpr ControlLevel DEFAULT_CONTROL_LEVEL = ControlLevel::ReadObs;
 
+/* Here rather than beside the defaults in obs-browser-plugin.cpp so the read that
+ * decides whether audio reaches the mixer at all -- BrowserSource::Update -- spells
+ * the key the same way the defaults and the properties form do. */
+inline constexpr char REROUTE_AUDIO_KEY[] = "reroute_audio";
+
 extern bool hwaccel;
 
 struct BrowserSource {
