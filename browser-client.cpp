@@ -606,9 +606,26 @@ static CefAudioHandler::ChannelLayout Convert2CEFSpeakerLayout(int channels)
 bool BrowserClient::GetAudioParameters(CefRefPtr<CefBrowser> browser, CefAudioParameters &params)
 {
 	UNUSED_PARAMETER(browser);
-	int channels = (int)audio_output_get_channels(obs_get_audio());
-	params.channel_layout = Convert2CEFSpeakerLayout(channels);
-	params.sample_rate = (int)audio_output_get_sample_rate(obs_get_audio());
+
+	/* obs_get_audio() hands out obs->audio.audio raw, and obs_reset_audio2 leaves that NULL
+	 * while it swaps the mix -- so the two accessors this used to call would fault. It is
+	 * genuinely reachable here, unlike the other unguarded sites: CEF documents this as its
+	 * own UI thread, and on every platform but macOS that is BrowserManagerThread's
+	 * CefRunMessageLoop, while obs_reset_audio runs on the app's UI thread. Two threads, no
+	 * synchronisation.
+	 *
+	 * Falling back rather than returning false: false cancels the capture for that stream,
+	 * which would drop a widget's audio out of the mix for far longer than the reset lasts,
+	 * and rerouted overlay audio exists precisely so it does not leave the mix. A stale rate
+	 * costs nothing -- libobs resamples a source to the mix rate before anything downstream
+	 * sees it. */
+	struct obs_audio_info oai;
+	if (!obs_get_audio_info(&oai)) {
+		oai.samples_per_sec = 48000;
+		oai.speakers = SPEAKERS_STEREO;
+	}
+	params.channel_layout = Convert2CEFSpeakerLayout((int)get_audio_channels(oai.speakers));
+	params.sample_rate = (int)oai.samples_per_sec;
 	params.frames_per_buffer = kFramesPerBuffer;
 	return true;
 }
