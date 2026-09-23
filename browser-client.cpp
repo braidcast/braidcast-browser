@@ -23,6 +23,7 @@
 #include <obs-frontend-api.h>
 #include <obs.hpp>
 #include <util/platform.h>
+#include <algorithm>
 #ifdef BROWSER_USE_QT
 #include <QApplication>
 #include <QThread>
@@ -540,6 +541,66 @@ static speaker_layout GetSpeakerLayout(CefAudioHandler::ChannelLayout cefLayout)
 	}
 }
 
+/* CEF only captures a browser's audio while Chromium counts the page as audible, and drops the
+ * capture two seconds after it goes quiet. Every sound after a pause then waits for a fresh
+ * capture, created on the CEF UI thread once the audibility poll notices it, and the page is
+ * muted when rerouted -- so whatever plays before that capture attaches is lost, which under
+ * load is the whole onset of an alert. A constant signal just above the audibility threshold
+ * keeps the page audible from load to unload, so the capture is created once and never torn
+ * down.
+ *
+ * 5e-4 is -66 dBFS: 6 dB over Chromium's kSilenceThresholdDBFS (-72.25 dBFS), the level its
+ * audio stream monitor measures "audible" against. A DC offset rather than a tone because that
+ * monitor's power is a mean of squared samples, which a DC level satisfies with nothing to hear
+ * -- and because a known DC level can be taken back out exactly: OnAudioStreamPacket subtracts
+ * this same value, so the keepalive never reaches the mix and several rerouted sources cannot add
+ * up to a floor anyone sees on a meter. One constant feeds both, so they cannot drift apart. */
+static constexpr float AUDIO_KEEPALIVE_LEVEL = 5e-4f;
+
+/* Once per document: the flag lives on the page's window, so a reload or navigation -- a new
+ * document -- gets a keepalive of its own, and nothing else can add a second. The resume covers
+ * a context that starts suspended or is suspended later; the app's autoplay policy makes that
+ * unlikely, but a suspended context is silent, and silence is the defect.
+ *
+ * CSP: ExecuteJavaScript evaluates this as embedder script, outside the page's script-src, so a
+ * third-party page's Content-Security-Policy does not block it. Nothing in it needs the page's
+ * permission either -- no inline element, no eval, no fetch -- and WebAudio has no CSP directive.
+ *
+ * "%.9g" round-trips a float, so the page's AudioParam (float32) holds exactly the value the
+ * capture subtracts. */
+static std::string AudioKeepaliveScript()
+{
+	char level[32];
+	snprintf(level, sizeof(level), "%.9g", AUDIO_KEEPALIVE_LEVEL);
+	return std::string("(function(){"
+			   "if(window.__braidcastAudioKeepalive)return;"
+			   "var C=window.AudioContext||window.webkitAudioContext;"
+			   "if(!C)return;"
+			   "var ctx;try{ctx=new C();}catch(e){return;}"
+			   "var src=ctx.createConstantSource();"
+			   "src.offset.value=") +
+	       level +
+	       ";"
+	       "src.connect(ctx.destination);"
+	       "src.start();"
+	       "var wake=function(){if(ctx.state!=='running')ctx.resume().catch(function(){});};"
+	       "ctx.onstatechange=wake;"
+	       "wake();"
+	       "Object.defineProperty(window,'__braidcastAudioKeepalive',{value:ctx});"
+	       "})();";
+}
+
+/* The keepalive plays into the page's default stereo destination, so it reaches the capture on
+ * the front pair. Chromium's channel mixer leaves centre, LFE and surrounds silent when it mixes
+ * stereo up to a wider capture layout, and averages the pair into a mono one's single channel --
+ * read from its mixing rules; only a stereo mix has been measured. So the level comes back out
+ * of the first two channels and no others -- subtracting it from a surround channel would put
+ * the DC there instead. Whenever the keepalive is not running -- between a navigation and its
+ * OnLoadEnd, or on a page where the script could not start a context -- the page's own audio is
+ * shifted by the level instead, and only while that audio keeps the capture up; that is as far
+ * below hearing as the keepalive itself. */
+static constexpr int AUDIO_KEEPALIVE_CHANNELS = 2;
+
 void BrowserClient::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser, const CefAudioParameters &params_,
 					 int channels_)
 {
@@ -562,6 +623,17 @@ void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const flo
 	int speaker_count = get_audio_channels(speakers);
 	for (int i = 0; i < speaker_count; i++)
 		audio.data[i] = pcm[i];
+
+	if (audio_keepalive() && frames > 0) {
+		const int keepalive_channels = std::min(speaker_count, AUDIO_KEEPALIVE_CHANNELS);
+		keepalive_removed.resize((size_t)keepalive_channels * frames);
+		for (int ch = 0; ch < keepalive_channels; ch++) {
+			float *out = keepalive_removed.data() + (size_t)ch * frames;
+			for (int i = 0; i < frames; i++)
+				out[i] = data[ch][i] - AUDIO_KEEPALIVE_LEVEL;
+			audio.data[ch] = (const uint8_t *)out;
+		}
+	}
 	audio.samples_per_sec = sample_rate;
 	audio.frames = frames;
 	audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
@@ -608,11 +680,13 @@ bool BrowserClient::GetAudioParameters(CefRefPtr<CefBrowser> browser, CefAudioPa
 	UNUSED_PARAMETER(browser);
 
 	/* obs_get_audio() hands out obs->audio.audio raw, and obs_reset_audio2 leaves that NULL
-	 * while it swaps the mix -- so the two accessors this used to call would fault. It is
-	 * genuinely reachable here, unlike the other unguarded sites: CEF documents this as its
-	 * own UI thread, and on every platform but macOS that is BrowserManagerThread's
-	 * CefRunMessageLoop, while obs_reset_audio runs on the app's UI thread. Two threads, no
-	 * synchronisation.
+	 * while it swaps the mix -- so the two accessors this used to call would fault. CEF calls
+	 * this on its UI thread. Under FrontendOwnsCef, the way Braidcast runs this plugin, that is
+	 * the app's own UI thread -- the one whose CefRunMessageLoop the frontend drives, and the
+	 * one obs_reset_audio runs on -- so the two cannot overlap there. On the plugin's own-CEF
+	 * path it is BrowserManagerThread's CefRunMessageLoop instead (every platform but macOS),
+	 * a second thread with no synchronisation against the reset, and there the NULL is
+	 * reachable.
 	 *
 	 * Falling back rather than returning false: false cancels the capture for that stream,
 	 * which would drop a widget's audio out of the mix for far longer than the reset lasts,
@@ -634,6 +708,10 @@ void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, 
 {
 	if (!valid()) {
 		return;
+	}
+
+	if (frame->IsMain() && audio_keepalive()) {
+		frame->ExecuteJavaScript(AudioKeepaliveScript(), "", 0);
 	}
 
 	if (frame->IsMain() && bs->css.length()) {

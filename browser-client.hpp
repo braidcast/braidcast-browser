@@ -19,6 +19,7 @@
 #pragma once
 
 #include <graphics/graphics.h>
+#include <vector>
 #include <util/threading.h>
 #include "cef-headers.hpp"
 #include "obs-browser-source.hpp"
@@ -40,6 +41,14 @@ class BrowserClient : public CefClient,
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 
 	inline bool valid() const;
+
+	/* Whether this client runs the rerouted-audio keepalive (AudioKeepaliveScript): injected on
+	 * load and subtracted from every captured packet, both decided here so they cannot disagree. */
+	inline bool audio_keepalive() const { return reroute_audio; }
+	/* The captured packet with the keepalive's level taken out, reused so a packet costs no
+	 * allocation. Only OnAudioStreamPacket touches it, and CEF delivers one browser's packets in
+	 * sequence; obs_source_output_audio copies the samples before returning. */
+	std::vector<float> keepalive_removed;
 
 	void UpdateExtraTexture();
 
