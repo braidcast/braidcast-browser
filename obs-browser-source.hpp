@@ -58,6 +58,10 @@ struct BrowserSource {
 	std::string url;
 	std::string css;
 	gs_texture_t *texture = nullptr;
+	/* Whether texture was opened from CEF's shared handle rather than filled from an OnPaint
+	 * buffer. One source can take frames from either path, so this is set with texture and
+	 * cleared with it, always under the graphics lock. */
+	bool texture_shared = false;
 	gs_texture_t *extra_texture = nullptr;
 	uint32_t last_cx = 0;
 	uint32_t last_cy = 0;
@@ -88,6 +92,10 @@ struct BrowserSource {
 	/* Whether cefBrowser is set, readable from Tick without taking lockBrowser
 	 * or a browser reference on the graphics thread. Written by SetBrowser. */
 	std::atomic<bool> has_browser = false;
+	/* Set by OnPaint when CEF paints on the CPU although shared textures are on; Tick logs it
+	 * once per source, where the source's name is safe to read. */
+	std::atomic<bool> cpu_paints_under_sharing = false;
+	bool cpu_paints_logged = false;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 #if defined(BROWSER_EXTERNAL_BEGIN_FRAME_ENABLED) && defined(ENABLE_BROWSER_SHARED_TEXTURE)
 	bool reset_frame = false;
@@ -108,6 +116,7 @@ struct BrowserSource {
 			gs_texture_destroy(texture);
 			texture = nullptr;
 		}
+		texture_shared = false;
 		obs_leave_graphics();
 	}
 

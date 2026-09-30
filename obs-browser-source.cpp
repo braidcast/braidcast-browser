@@ -400,7 +400,7 @@ void BrowserSource::SetShowing(bool showing)
 
 		obs_enter_graphics();
 
-		if (!hwaccel && texture) {
+		if (texture && !texture_shared) {
 			DestroyTextures();
 		}
 
@@ -562,6 +562,14 @@ void BrowserSource::Tick()
 	const bool counting = has_browser.load(std::memory_order_relaxed) && obs_source_showing(source);
 	obs_source_set_frame_count_kind(source, counting ? OBS_FRAME_COUNT_BROWSER_PAINT : OBS_FRAME_COUNT_NONE);
 
+	if (!cpu_paints_logged && cpu_paints_under_sharing.load(std::memory_order_relaxed)) {
+		cpu_paints_logged = true;
+		blog(LOG_WARNING,
+		     "[obs-browser: '%s'] shared textures are on but CEF paints on the CPU "
+		     "(no GPU compositing, e.g. its GPU process crashed); rendering the CPU frames",
+		     obs_source_get_name(source));
+	}
+
 	if (create_browser && CreateBrowser())
 		create_browser = false;
 #if defined(ENABLE_BROWSER_SHARED_TEXTURE)
@@ -589,7 +597,7 @@ void BrowserSource::Render()
 {
 	bool flip = false;
 #if defined(ENABLE_BROWSER_SHARED_TEXTURE) && CHROME_VERSION_BUILD < 6367
-	flip = hwaccel;
+	flip = texture_shared;
 #endif
 
 	if (texture) {
@@ -598,7 +606,7 @@ void BrowserSource::Render()
 		gs_effect_t *effect;
 
 		if (type == GS_DEVICE_OPENGL) {
-			effect = obs_get_base_effect((hwaccel) ? OBS_EFFECT_DEFAULT_RECT : OBS_EFFECT_DEFAULT);
+			effect = obs_get_base_effect(texture_shared ? OBS_EFFECT_DEFAULT_RECT : OBS_EFFECT_DEFAULT);
 		} else {
 			effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
 		}

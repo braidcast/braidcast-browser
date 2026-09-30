@@ -317,35 +317,46 @@ void BrowserClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const 
 		return;
 	}
 
-#ifdef ENABLE_BROWSER_SHARED_TEXTURE
-	if (sharing_available) {
+	if (!valid()) {
 		return;
+	}
+
+#ifdef ENABLE_BROWSER_SHARED_TEXTURE
+	/* Shared textures on do not guarantee accelerated paints: once Chromium stops compositing
+	 * on the GPU, as it does after its GPU process crash-loops at startup, every frame arrives
+	 * here instead. They are the only frames coming, so they take the CPU path. */
+	if (sharing_available) {
+		bs->cpu_paints_under_sharing.store(true, std::memory_order_relaxed);
 	}
 #endif
 
-	if (!valid()) {
+	/* One graphics section, so the texture cannot be destroyed between the checks and the
+	 * upload, and none is created after BrowserSource::Destroy has destroyed its textures. */
+	obs_enter_graphics();
+	if (bs->destroying) {
+		obs_leave_graphics();
+		return;
+	}
+
+	if (bs->texture_shared || bs->width != width || bs->height != height) {
+		bs->DestroyTextures();
+	}
+
+	if (!width || !height) {
+		obs_leave_graphics();
 		return;
 	}
 
 	count_paint();
 
-	if (bs->width != width || bs->height != height) {
-		obs_enter_graphics();
-		bs->DestroyTextures();
-		obs_leave_graphics();
-	}
-
-	if (!bs->texture && width && height) {
-		obs_enter_graphics();
+	if (!bs->texture) {
 		bs->texture = gs_texture_create(width, height, GS_BGRA, 1, (const uint8_t **)&buffer, GS_DYNAMIC);
 		bs->width = width;
 		bs->height = height;
-		obs_leave_graphics();
 	} else {
-		obs_enter_graphics();
 		gs_texture_set_image(bs->texture, (const uint8_t *)buffer, width * 4, false);
-		obs_leave_graphics();
 	}
+	obs_leave_graphics();
 }
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
@@ -426,15 +437,25 @@ void BrowserClient::OnAcceleratedPaint(CefRefPtr<CefBrowser>, PaintElementType t
 	}
 #endif
 
-#if !defined(_WIN32) && CHROME_VERSION_BUILD < 6367
-	if (shared_handle == bs->last_handle)
+	obs_enter_graphics();
+
+	/* As in OnPaint: no texture is opened after BrowserSource::Destroy has destroyed its own. */
+	if (bs->destroying) {
+		obs_leave_graphics();
 		return;
+	}
+
+#if !defined(_WIN32) && CHROME_VERSION_BUILD < 6367
+	/* The same handle is skipped only while its texture is still held, not after OnPaint or
+	 * DestroyTextures replaced it. */
+	if (shared_handle == bs->last_handle && bs->texture_shared) {
+		obs_leave_graphics();
+		return;
+	}
 #endif
 
 	/* Past every return for a frame that is not delivered. */
 	count_paint();
-
-	obs_enter_graphics();
 
 	if (bs->texture) {
 #ifdef _WIN32
@@ -465,6 +486,7 @@ void BrowserClient::OnAcceleratedPaint(CefRefPtr<CefBrowser>, PaintElementType t
 						    format.drm_format, format.gs_format, info.plane_count, fds, strides,
 						    offsets, modifier != DRM_FORMAT_MOD_INVALID ? modifiers : NULL);
 #endif
+	bs->texture_shared = bs->texture != nullptr;
 	UpdateExtraTexture();
 	obs_leave_graphics();
 
@@ -490,13 +512,22 @@ void BrowserClient::OnAcceleratedPaint2(CefRefPtr<CefBrowser>, PaintElementType 
 		return;
 	}
 
-	count_paint();
+	obs_enter_graphics();
 
-	if (!new_texture) {
+	/* As in OnAcceleratedPaint: no texture is opened after BrowserSource::Destroy. */
+	if (bs->destroying) {
+		obs_leave_graphics();
 		return;
 	}
 
-	obs_enter_graphics();
+	count_paint();
+
+	/* An unchanged handle keeps its texture only while that texture is still held; after
+	 * OnPaint replaced it with a CPU texture, the handle is opened again. */
+	if (!new_texture && bs->texture_shared) {
+		obs_leave_graphics();
+		return;
+	}
 
 	if (bs->texture) {
 		gs_texture_destroy(bs->texture);
@@ -511,6 +542,7 @@ void BrowserClient::OnAcceleratedPaint2(CefRefPtr<CefBrowser>, PaintElementType 
 #else
 	bs->texture = gs_texture_open_shared((uint32_t)(uintptr_t)shared_handle);
 #endif
+	bs->texture_shared = bs->texture != nullptr;
 	UpdateExtraTexture();
 	obs_leave_graphics();
 }
