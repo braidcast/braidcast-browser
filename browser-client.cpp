@@ -327,6 +327,8 @@ void BrowserClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const 
 		return;
 	}
 
+	count_paint();
+
 	if (bs->width != width || bs->height != height) {
 		obs_enter_graphics();
 		bs->DestroyTextures();
@@ -429,6 +431,9 @@ void BrowserClient::OnAcceleratedPaint(CefRefPtr<CefBrowser>, PaintElementType t
 		return;
 #endif
 
+	/* Past every return for a frame that is not delivered. */
+	count_paint();
+
 	obs_enter_graphics();
 
 	if (bs->texture) {
@@ -484,6 +489,8 @@ void BrowserClient::OnAcceleratedPaint2(CefRefPtr<CefBrowser>, PaintElementType 
 	if (!valid()) {
 		return;
 	}
+
+	count_paint();
 
 	if (!new_texture) {
 		return;

@@ -82,6 +82,12 @@ struct BrowserSource {
 	bool first_update = true;
 	bool reroute_audio = true;
 	std::atomic<bool> destroying = false;
+	/* Frames CEF delivered since the last Tick. Written by the paint
+	 * callbacks on the CEF UI thread, taken by Tick on the graphics thread. */
+	std::atomic<uint32_t> paints = 0;
+	/* Whether cefBrowser is set, readable from Tick without taking lockBrowser
+	 * or a browser reference on the graphics thread. Written by SetBrowser. */
+	std::atomic<bool> has_browser = false;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 #if defined(BROWSER_EXTERNAL_BEGIN_FRAME_ENABLED) && defined(ENABLE_BROWSER_SHARED_TEXTURE)
 	bool reset_frame = false;

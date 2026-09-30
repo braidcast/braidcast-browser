@@ -42,6 +42,13 @@ class BrowserClient : public CefClient,
 
 	inline bool valid() const;
 
+	/* One frame delivered to the source, for its paint rate. Call only after valid(): the
+	 * paint callbacks run on the CEF UI thread, which is also where BrowserSource is deleted
+	 * (its destructor clears bs), so a bs that passed valid() outlives the callback. Touch
+	 * nothing beyond bs itself: its obs_source_t can be freed on another thread as soon as
+	 * destroying is set, which may happen after valid() returned. */
+	inline void count_paint() { bs->paints.fetch_add(1, std::memory_order_relaxed); }
+
 	/* Whether this client runs the rerouted-audio keepalive (AudioKeepaliveScript): injected on
 	 * load and subtracted from every captured packet, both decided here so they cannot disagree. */
 	inline bool audio_keepalive() const { return reroute_audio; }

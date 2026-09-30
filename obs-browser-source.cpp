@@ -432,6 +432,7 @@ void BrowserSource::SetBrowser(CefRefPtr<CefBrowser> b)
 {
 	std::lock_guard<std::recursive_mutex> auto_lock(lockBrowser);
 	cefBrowser = b;
+	has_browser.store(!!b, std::memory_order_relaxed);
 }
 
 CefRefPtr<CefBrowser> BrowserSource::GetBrowser()
@@ -551,6 +552,16 @@ void BrowserSource::Update(obs_data_t *settings)
 
 void BrowserSource::Tick()
 {
+	/* Taken every tick, so paints never pile up for a later tick: libobs
+	 * discards what is reported on a tick the source is not showing or its
+	 * kind is NONE. The kind says there is something to count, as WGC's does
+	 * with its session: a browser exists and the source shows. NONE (creation
+	 * pending, shut down while invisible, or hidden) also drops the source
+	 * from the capture-rate sample, so it reads as absent rather than 0/s. */
+	obs_source_add_new_frames(source, paints.exchange(0, std::memory_order_relaxed));
+	const bool counting = has_browser.load(std::memory_order_relaxed) && obs_source_showing(source);
+	obs_source_set_frame_count_kind(source, counting ? OBS_FRAME_COUNT_BROWSER_PAINT : OBS_FRAME_COUNT_NONE);
+
 	if (create_browser && CreateBrowser())
 		create_browser = false;
 #if defined(ENABLE_BROWSER_SHARED_TEXTURE)
