@@ -10,6 +10,9 @@ class QCefBrowserClient : public CefClient,
 #if CHROME_VERSION_BUILD >= 6533
 			  public CefCommandHandler,
 #endif
+#ifdef ENABLE_BROWSER_LOOPBACK_PERMISSION
+			  public CefPermissionHandler,
+#endif
 			  public CefRequestHandler,
 			  public CefLifeSpanHandler,
 			  public CefContextMenuHandler,
@@ -32,6 +35,9 @@ public:
 #if CHROME_VERSION_BUILD >= 6533
 	virtual CefRefPtr<CefCommandHandler> GetCommandHandler() override;
 #endif
+#ifdef ENABLE_BROWSER_LOOPBACK_PERMISSION
+	virtual CefRefPtr<CefPermissionHandler> GetPermissionHandler() override;
+#endif
 	virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override;
 	virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override;
 	virtual CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override;
@@ -43,6 +49,14 @@ public:
 #if CHROME_VERSION_BUILD >= 6533
 	virtual bool OnChromeCommand(CefRefPtr<CefBrowser> browser, int command_id,
 				     cef_window_open_disposition_t disposition) override;
+#endif
+
+	/* CefPermissionHandler */
+#ifdef ENABLE_BROWSER_LOOPBACK_PERMISSION
+	virtual bool OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser, uint64_t prompt_id,
+					    const CefString &requesting_origin, uint32_t requested_permissions,
+					    CefRefPtr<CefPermissionPromptCallback> callback) override;
+
 #endif
 
 	/* CefDisplayHandler */

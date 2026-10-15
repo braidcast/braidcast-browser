@@ -59,6 +59,13 @@ CefRefPtr<CefDisplayHandler> BrowserClient::GetDisplayHandler()
 	return this;
 }
 
+#ifdef ENABLE_BROWSER_LOOPBACK_PERMISSION
+CefRefPtr<CefPermissionHandler> BrowserClient::GetPermissionHandler()
+{
+	return this;
+}
+#endif
+
 CefRefPtr<CefLifeSpanHandler> BrowserClient::GetLifeSpanHandler()
 {
 	return this;
@@ -313,6 +320,21 @@ bool BrowserClient::OnTooltip(CefRefPtr<CefBrowser>, CefString &text)
 	return false;
 #endif
 }
+
+#ifdef ENABLE_BROWSER_LOOPBACK_PERMISSION
+/* CefPermissionHandler */
+bool BrowserClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser>, uint64_t, const CefString &,
+					   uint32_t requested_permissions,
+					   CefRefPtr<CefPermissionPromptCallback> callback)
+{
+	// Implicitly allow Localhost access to retain previous behavior for now
+	if ((requested_permissions & CEF_PERMISSION_TYPE_LOOPBACK_NETWORK) != 0) {
+		callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+		return true;
+	}
+	return false;
+}
+#endif
 
 void BrowserClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const RectList &, const void *buffer,
 			    int width, int height)

@@ -49,6 +49,15 @@
 #define ENABLE_BROWSER_SHARED_TEXTURE
 #endif
 
+/* CEF_PERMISSION_TYPE_LOOPBACK_NETWORK arrived in CEF API version 14500. CEF_API_ADDED itself only
+ * exists from 6943, and an #if cannot name an undefined function-like macro even behind &&, so the
+ * API check nests inside the version check. */
+#if CHROME_VERSION_BUILD >= 6943
+#if CEF_API_ADDED(14500)
+#define ENABLE_BROWSER_LOOPBACK_PERMISSION
+#endif
+#endif
+
 #define SendBrowserProcessMessage(browser, pid, msg)             \
 	CefRefPtr<CefFrame> mainFrame = browser->GetMainFrame(); \
 	if (mainFrame) {                                         \

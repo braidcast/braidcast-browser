@@ -45,6 +45,13 @@ CefRefPtr<CefCommandHandler> QCefBrowserClient::GetCommandHandler()
 }
 #endif
 
+#ifdef ENABLE_BROWSER_LOOPBACK_PERMISSION
+CefRefPtr<CefPermissionHandler> QCefBrowserClient::GetPermissionHandler()
+{
+	return this;
+}
+#endif
+
 CefRefPtr<CefRequestHandler> QCefBrowserClient::GetRequestHandler()
 {
 	return this;
@@ -80,6 +87,21 @@ CefRefPtr<CefJSDialogHandler> QCefBrowserClient::GetJSDialogHandler()
 bool QCefBrowserClient::OnChromeCommand(CefRefPtr<CefBrowser>, int, cef_window_open_disposition_t)
 {
 	return true;
+}
+#endif
+
+/* CefPermissionHandler */
+#ifdef ENABLE_BROWSER_LOOPBACK_PERMISSION
+bool QCefBrowserClient::OnShowPermissionPrompt(CefRefPtr<CefBrowser>, uint64_t, const CefString &,
+					       uint32_t requested_permissions,
+					       CefRefPtr<CefPermissionPromptCallback> callback)
+{
+	// Implicitly allow Localhost access to retain previous behavior for now
+	if ((requested_permissions & CEF_PERMISSION_TYPE_LOOPBACK_NETWORK) != 0) {
+		callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+		return true;
+	}
+	return false;
 }
 #endif
 
