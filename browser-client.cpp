@@ -743,6 +743,17 @@ bool BrowserClient::GetAudioParameters(CefRefPtr<CefBrowser> browser, CefAudioPa
 	return true;
 }
 
+void BrowserClient::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType)
+{
+	if (!valid()) {
+		return;
+	}
+
+	if (reroute_audio && frame->IsMain()) {
+		browser->GetHost()->SetAudioMuted(true);
+	}
+}
+
 void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int)
 {
 	if (!valid()) {
@@ -765,6 +776,21 @@ void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, 
 
 		frame->ExecuteJavaScript(script, "", 0);
 	}
+}
+
+void BrowserClient::OnLoadError(CefRefPtr<CefBrowser>, [[maybe_unused]] CefRefPtr<CefFrame> frame,
+				[[maybe_unused]] CefLoadHandler::ErrorCode errorCode, const CefString &,
+				const CefString &)
+{
+#if CHROME_VERSION_BUILD > 6533
+	if (errorCode == ERR_ABORTED)
+		return;
+
+	// CEF doesn't currently provide a way to properly disable/override the default Chrome error page.
+	// https://github.com/obsproject/obs-studio/issues/13499
+	// FIXME: https://github.com/chromiumembedded/cef/issues/3852
+	frame->ExecuteJavaScript("document.querySelector('html').innerText = '';", "", 0);
+#endif
 }
 
 /* A console message carries the URL of the script that produced it, and a Braidcast
