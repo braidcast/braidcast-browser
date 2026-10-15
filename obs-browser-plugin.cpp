@@ -1128,7 +1128,12 @@ static void MigrateToChromeRuntime()
 bool obs_module_load(void)
 {
 #if CHROME_VERSION_BUILD > 6533
-	MigrateToChromeRuntime();
+	/* The migration copies this module's own CEF profile into a Chrome Runtime layout. A
+	 * frontend that owns CEF chose the profile itself and BrowserInit never points CEF at this
+	 * directory, so the copy would land where nothing reads it. */
+	if (!FrontendOwnsCef()) {
+		MigrateToChromeRuntime();
+	}
 #endif
 #ifdef ENABLE_BROWSER_QT_LOOP
 	qRegisterMetaType<MessageTask>("MessageTask");
