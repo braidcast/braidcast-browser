@@ -804,7 +804,11 @@ void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, 
 		script += "obsCSS.appendChild(document.createTextNode("
 			  "decodeURIComponent(\"" +
 			  uriEncodedCSS + "\")));";
-		script += "document.querySelector('head').appendChild(obsCSS);";
+		/* OnLoadError clears a failed load's error page, <head> included, so a page with no
+		 * head gets no CSS rather than an uncaught TypeError in the log. */
+		script += "if (document.head) {"
+			  "document.head.appendChild(obsCSS);"
+			  "}";
 
 		frame->ExecuteJavaScript(script, "", 0);
 	}
