@@ -241,8 +241,9 @@ static obs_properties_t *browser_source_get_properties(void *data)
 		dstr_copy(path, bs->url.c_str());
 		dstr_replace(path, "\\", "/");
 		slash = strrchr(path->array, '/');
-		if (slash)
+		if (slash) {
 			dstr_resize(path, slash - path->array + 1);
+		}
 	}
 
 	obs_property_set_modified_callback(prop, is_local_file_modified);
@@ -533,8 +534,9 @@ static void fill_shared_browser_source_info(struct obs_source_info &info)
 	};
 	info.activate = [](void *data) {
 		BrowserSource *bs = static_cast<BrowserSource *>(data);
-		if (bs->restart)
+		if (bs->restart) {
 			bs->Refresh();
+		}
 		bs->SetActive(true);
 	};
 	info.deactivate = [](void *data) {
@@ -606,21 +608,26 @@ static bool call_overlay_proc(const char *proc, const char *out_param, const cha
 	out.clear();
 
 	proc_handler_t *ph = obs_get_proc_handler();
-	if (!ph)
+	if (!ph) {
 		return false;
+	}
 
 	ScopedCallData call;
-	if (overlay_id)
+	if (overlay_id) {
 		calldata_set_string(&call.cd, "id", overlay_id);
+	}
 
-	if (!proc_handler_call(ph, proc, &call.cd))
+	if (!proc_handler_call(ph, proc, &call.cd)) {
 		return false;
+	}
 
 	const char *value = calldata_string(&call.cd, out_param);
-	if (value)
+	if (value) {
 		out = value;
-	if (listening)
+	}
+	if (listening) {
 		calldata_get_bool(&call.cd, "listening", listening);
+	}
 	return true;
 }
 
@@ -664,8 +671,9 @@ static void braidcast_overlay_migrate_reroute(obs_data_t *settings)
 /* The overlay this source is bound to right now, straight off its settings. */
 static std::string braidcast_overlay_stored_id(BrowserSource *bs)
 {
-	if (!bs || !bs->source)
+	if (!bs || !bs->source) {
 		return std::string();
+	}
 
 	OBSDataAutoRelease settings = obs_source_get_settings(bs->source);
 	return obs_data_get_string(settings, OVERLAY_ID_KEY);
@@ -701,18 +709,21 @@ static obs_properties_t *braidcast_overlay_get_properties(void *data)
 		nlohmann::json parsed = nlohmann::json::parse(listed, nullptr, false);
 		if (parsed.is_array()) {
 			for (const auto &entry : parsed) {
-				if (!entry.is_object())
+				if (!entry.is_object()) {
 					continue;
+				}
 
 				const std::string id = entry.value("id", std::string());
 				const std::string name = entry.value("name", std::string());
-				if (id.empty())
+				if (id.empty()) {
 					continue;
+				}
 
 				obs_property_list_add_string(overlays, name.empty() ? id.c_str() : name.c_str(),
 							     id.c_str());
-				if (id == storedId)
+				if (id == storedId) {
 					storedIdListed = true;
+				}
 			}
 		}
 
@@ -756,8 +767,9 @@ static void braidcast_overlay_update(void *data, obs_data_t *settings)
 
 	std::string url;
 	call_overlay_proc(OVERLAY_URL_PROC, "url", obs_data_get_string(settings, OVERLAY_ID_KEY), url);
-	if (!url.empty())
+	if (!url.empty()) {
 		obs_data_set_string(resolved, "url", url.c_str());
+	}
 
 	static_cast<BrowserSource *>(data)->Update(resolved);
 }
@@ -839,12 +851,14 @@ static void handle_obs_frontend_event(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_SCENE_CHANGED: {
 		OBSSourceAutoRelease source = obs_frontend_get_current_scene();
 
-		if (!source)
+		if (!source) {
 			break;
+		}
 
 		const char *name = obs_source_get_name(source);
-		if (!name)
+		if (!name) {
 			break;
+		}
 
 		nlohmann::json json = {{"name", name},
 				       {"width", obs_source_get_width(source)},
@@ -870,12 +884,14 @@ static void handle_obs_frontend_event(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_TRANSITION_CHANGED: {
 		OBSSourceAutoRelease source = obs_frontend_get_current_transition();
 
-		if (!source)
+		if (!source) {
 			break;
+		}
 
 		const char *name = obs_source_get_name(source);
-		if (!name)
+		if (!name) {
 			break;
+		}
 
 		nlohmann::json json = {{"name", name}};
 
@@ -912,22 +928,26 @@ static inline void EnumAdapterCount()
 	UINT i = 0;
 
 	hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&factory);
-	if (FAILED(hr))
+	if (FAILED(hr)) {
 		return;
+	}
 
 	while (factory->EnumAdapters1(i++, &adapter) == S_OK) {
 		DXGI_ADAPTER_DESC desc;
 
 		hr = adapter->GetDesc(&desc);
-		if (FAILED(hr))
+		if (FAILED(hr)) {
 			continue;
+		}
 
-		if (i == 1)
+		if (i == 1) {
 			deviceId = desc.Description;
+		}
 
 		/* ignore Microsoft's 'basic' renderer' */
-		if (desc.VendorId == 0x1414 && desc.DeviceId == 0x8c)
+		if (desc.VendorId == 0x1414 && desc.DeviceId == 0x8c) {
 			continue;
+		}
 
 		adapterCount++;
 	}
@@ -975,8 +995,9 @@ static void check_hwaccel_support(void)
 	glVersion = gs_get_driver_version();
 	obs_leave_graphics();
 
-	if (!glVersion)
+	if (!glVersion) {
 		return;
+	}
 
 	if (strstr(glVersion, "NVIDIA") != NULL) {
 		hwaccel = false;
@@ -1126,8 +1147,9 @@ bool obs_module_load(void)
 #if defined(__APPLE__) && !defined(ENABLE_BROWSER_LEGACY)
 	/* Load CEF at runtime as required on macOS */
 	CefScopedLibraryLoader library_loader;
-	if (!library_loader.LoadInMain())
+	if (!library_loader.LoadInMain()) {
 		return false;
+	}
 #endif
 #endif
 	blog(LOG_INFO, "[obs-browser]: Version %s", OBS_BROWSER_VERSION_STRING);
@@ -1153,13 +1175,15 @@ bool obs_module_load(void)
 void obs_module_post_load(void)
 {
 	auto vendor = obs_websocket_register_vendor("obs-browser");
-	if (!vendor)
+	if (!vendor) {
 		return;
+	}
 
 	auto emit_event_request_cb = [](obs_data_t *request_data, obs_data_t *, void *) {
 		const char *event_name = obs_data_get_string(request_data, "event_name");
-		if (!event_name)
+		if (!event_name) {
 			return;
+		}
 
 		OBSDataAutoRelease event_data = obs_data_get_obj(request_data, "event_data");
 		const char *event_data_string = event_data ? obs_data_get_json(event_data) : "{}";
@@ -1167,8 +1191,9 @@ void obs_module_post_load(void)
 		DispatchJSEvent(event_name, event_data_string, nullptr);
 	};
 
-	if (!obs_websocket_vendor_register_request(vendor, "emit_event", emit_event_request_cb, nullptr))
+	if (!obs_websocket_vendor_register_request(vendor, "emit_event", emit_event_request_cb, nullptr)) {
 		blog(LOG_WARNING, "[obs-browser]: Failed to register obs-websocket request emit_event");
+	}
 }
 
 void obs_module_unload(void)
@@ -1185,8 +1210,9 @@ void obs_module_unload(void)
 	BrowserShutdown();
 #else
 	if (manager_thread.joinable()) {
-		if (!QueueCEFTask([]() { CefQuitMessageLoop(); }))
+		if (!QueueCEFTask([]() { CefQuitMessageLoop(); })) {
 			blog(LOG_DEBUG, "[obs-browser]: Failed to post CefQuit task to loop");
+		}
 
 		manager_thread.join();
 	}
